@@ -1,0 +1,25 @@
+{
+  "journalPath": "./data/journal.json",
+  "logFromBlock": "earliest",
+  "users": [],
+  "chains": [
+    {
+      "id": 42161,
+      "name": "arbitrum",
+      "rpcEnv": "RPC_ARBITRUM",
+      "storage": "0x0000000000000000000000000000000000000000"
+    },
+    {
+      "id": 8453,
+      "name": "base",
+      "rpcEnv": "RPC_BASE",
+      "storage": "0x0000000000000000000000000000000000000000"
+    },
+    {
+      "id": 56,
+      "name": "bnb",
+      "rpcEnv": "RPC_BNB",
+      "storage": "0x0000000000000000000000000000000000000000"
+    }
+  ]
+}
