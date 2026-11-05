@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { getAddress, isAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { syncAll, type AppConfig, type ChainConfig } from "./sync.js";
+import { readConfig } from "./config.js";
+import { syncAll } from "./sync.js";
 
 async function main(): Promise<void> {
   await loadEnvFile(".env");
@@ -33,32 +34,6 @@ function argument(name: string): string | undefined {
   const index = process.argv.indexOf(name);
   if (index < 0) return undefined;
   return process.argv[index + 1];
-}
-
-async function readConfig(filePath: string): Promise<AppConfig> {
-  const parsed = JSON.parse(await readFile(filePath, "utf8")) as {
-    journalPath?: string;
-    logFromBlock?: string;
-    users?: string[];
-    chains?: ChainConfig[];
-  };
-  const chains = parsed.chains ?? [];
-  if (chains.length === 0) throw new Error("Configura al menos una chain");
-  for (const chain of chains) {
-    if (!isAddress(chain.storage) || chain.storage === "0x0000000000000000000000000000000000000000") {
-      throw new Error(`${chain.name} no tiene storage`);
-    }
-    chain.storage = getAddress(chain.storage);
-  }
-  return {
-    journalPath: parsed.journalPath ?? "./data/journal.json",
-    logFromBlock: parsed.logFromBlock ?? "earliest",
-    users: (parsed.users ?? []).map((user) => {
-      if (!isAddress(user)) throw new Error(`User invalido: ${user}`);
-      return getAddress(user);
-    }),
-    chains,
-  };
 }
 
 async function loadEnvFile(filePath: string): Promise<void> {

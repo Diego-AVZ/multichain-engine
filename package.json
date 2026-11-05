@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "sync": "tsx src/cli.ts",
-    "test": "tsx --test test/calculate.test.ts"
+    "test": "tsx --test test/calculate.test.ts test/http.test.ts test/api.test.ts"
   },
   "dependencies": {
     "viem": "^2.37.6"

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   createPublicClient,
   createWalletClient,
@@ -52,6 +53,49 @@ const knownChains = new Map<number, Chain>([
   [bsc.id, bsc],
 ]);
 
+export type ChainSyncResult = {
+  chain: string;
+  outcome?: string;
+  error?: string;
+};
+
+const roundReports = new AsyncLocalStorage<Map<number, ChainSyncResult>>();
+
+function remember(chainId: number, chain: string, text: string, failed = false): void {
+  const reports = roundReports.getStore();
+  if (!reports) return;
+  const current = reports.get(chainId) ?? { chain };
+  current.chain = chain;
+  if (failed) {
+    current.error = text;
+    delete current.outcome;
+  } else if (!current.error) {
+    current.outcome = text;
+  }
+  reports.set(chainId, current);
+}
+
+export async function syncOne(
+  config: AppConfig,
+  user: Address,
+  options: { dryRun: boolean; account?: PrivateKeyAccount },
+): Promise<{ ok: boolean; error?: string; chains: ChainSyncResult[] }> {
+  const address = getAddress(user);
+  const reports = new Map<number, ChainSyncResult>();
+  try {
+    await roundReports.run(reports, async () => {
+      const chains = config.chains.map((item) => loadChain(item, options.account));
+      const journal = await loadJournal(config.journalPath);
+      await syncUser(address, chains, journal, config, options.dryRun);
+    });
+    return { ok: true, chains: [...reports.values()] };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`\n${address} no se sincronizo: ${message}`);
+    return { ok: false, error: message, chains: [...reports.values()] };
+  }
+}
+
 export async function syncAll(config: AppConfig, options: { dryRun: boolean; account?: PrivateKeyAccount }): Promise<number> {
   const chains = config.chains.map((item) => loadChain(item, options.account));
   const journal = await loadJournal(config.journalPath);
@@ -85,9 +129,9 @@ async function syncUser(
 
   for (const pulse of pulses) {
     const chainName = chains.find((item) => item.config.id === pulse.chainId)?.config.name ?? String(pulse.chainId);
-    console.log(
-      `  ${chainName} v${pulse.syncVersion} root ${pulse.root} sello ${pulse.hasSeal ? pulse.sealHash : "no"} temporal ${pulse.temporal.totalCapitalIn}`,
-    );
+    const line = `${chainName} v${pulse.syncVersion} root ${pulse.root} sello ${pulse.hasSeal ? pulse.sealHash : "no"} temporal ${pulse.temporal.totalCapitalIn}`;
+    console.log(`  ${line}`);
+    remember(pulse.chainId, chainName, line);
   }
 
   const history = mergeSealHistory([
@@ -161,6 +205,7 @@ async function sealOpenTemporals(user: Address, pulses: ChainPulse[], chains: Lo
     });
     await item.publicClient.waitForTransactionReceipt({ hash });
     console.log(`  sello ${item.config.name} ${hash}`);
+    remember(item.config.id, item.config.name, `sello ${item.config.name} ${hash}`);
   }));
   return true;
 }
@@ -241,6 +286,7 @@ async function broadcast(user: Address, plan: RoundPlan, chains: LoadedChain[]):
     const receipt = await item.publicClient.waitForTransactionReceipt({ hash });
     if (receipt.status !== "success") throw new Error(`transaccion revertida ${hash}`);
     console.log(`  commit ${item.config.name} v${commit.newVersion} ${hash}`);
+    remember(item.config.id, item.config.name, `commit ${item.config.name} v${commit.newVersion} ${hash}`);
   }));
 
   const failed = results.flatMap((result, index) => {
@@ -248,6 +294,10 @@ async function broadcast(user: Address, plan: RoundPlan, chains: LoadedChain[]):
     const commit = plan.commits[index];
     const message = result.reason instanceof Error ? result.reason.message : String(result.reason);
     console.error(`  commit chain ${commit?.chainId} fallo: ${message}`);
+    if (commit) {
+      const name = chains.find((item) => item.config.id === commit.chainId)?.config.name ?? String(commit.chainId);
+      remember(commit.chainId, name, `commit chain ${commit.chainId} fallo: ${message}`, true);
+    }
     return [message];
   });
   if (failed.length > 0) {
@@ -259,6 +309,7 @@ function printPlan(plan: RoundPlan, chains: LoadedChain[]): void {
   const name = (chainId: number) => chains.find((item) => item.config.id === chainId)?.config.name ?? String(chainId);
   if (plan.commits.length === 0) {
     console.log("  sin cambios");
+    for (const item of chains) remember(item.config.id, item.config.name, "sin cambios");
     return;
   }
   console.log(
