@@ -7,13 +7,15 @@
       "id": 42161,
       "name": "arbitrum",
       "rpcEnv": "RPC_ARBITRUM",
-      "storage": "0xBBECE20bc76a94270548d43131f4e457d39B5079"
+      "storage": "0xBBECE20bc76a94270548d43131f4e457d39B5079",
+      "fromBlock": "519058076"
     },
     {
       "id": 4663,
       "name": "robinhood",
       "rpcEnv": "RPC_ROBINHOOD",
-      "storage": "0xBBECE20bc76a94270548d43131f4e457d39B5079"
+      "storage": "0xBBECE20bc76a94270548d43131f4e457d39B5079",
+      "fromBlock": "106727536"
     }
   ]
 }

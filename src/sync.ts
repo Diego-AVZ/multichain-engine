@@ -24,6 +24,13 @@ import {
   type VersionRecord,
 } from "./calculate.js";
 import { loadJournal, putRecords, recordsFor, saveJournal, type Journal } from "./journal.js";
+import {
+  blockWindows,
+  exceedsLogBudget,
+  isLogRangeError,
+  LogRangeError,
+  logRangeLimit,
+} from "./log-range.js";
 
 export type ChainConfig = {
   id: number;
@@ -239,17 +246,15 @@ async function readCommitHistory(
     const fromBlock = parseFromBlock(item.config.fromBlock ?? fallbackFromBlock);
     let logs;
     try {
-      logs = await item.publicClient.getLogs({
-        address: item.config.storage,
-        event: globalPulseCommittedEvent,
-        args: { root: pulse.root },
-        fromBlock,
-        toBlock: "latest",
-      });
+      logs = await readRootLogs(item.publicClient, item.config.storage, pulse.root, fromBlock);
     } catch (error) {
-      throw new Error(
-        `No pude leer el historial de ${item.config.name}. Sin ese historial una chain atrasada podria contarse dos veces. ${error instanceof Error ? error.message : String(error)}`,
-      );
+      const fallback = canFallback(error) ? historyFallback(item) : undefined;
+      if (!fallback) throw historyError(item.config.name, error);
+      try {
+        logs = await readRootLogs(fallback, item.config.storage, pulse.root, fromBlock);
+      } catch (fallbackError) {
+        throw historyError(item.config.name, fallbackError);
+      }
     }
     for (const log of logs) {
       const chainIds = log.args.chainIds ?? [];
@@ -370,5 +375,92 @@ function parseFromBlock(value: string): bigint | "earliest" {
   if (value === "earliest") return "earliest";
   if (!/^\d+$/.test(value)) throw new Error(`fromBlock invalido: ${value}`);
   return BigInt(value);
+}
+
+type LogReader = Pick<PublicClient, "getLogs" | "getBlockNumber">;
+
+async function readRootLogs(
+  client: LogReader,
+  address: Address,
+  root: Address,
+  fromBlock: bigint | "earliest",
+) {
+  const query = {
+    address,
+    event: globalPulseCommittedEvent,
+    args: { root },
+  } as const;
+  try {
+    return await client.getLogs({ ...query, fromBlock, toBlock: "latest" });
+  } catch (error) {
+    if (!isLogRangeError(errorText(error))) throw error;
+    const latest = await client.getBlockNumber();
+    const start = fromBlock === "earliest" ? 0n : fromBlock;
+    if (start > latest) return [];
+    let window = logRangeLimit(errorText(error)) ?? 2_000n;
+    let lastError = error;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      if (exceedsLogBudget(start, latest, window)) throw new LogRangeError(window, start, latest);
+      try {
+        const windows = blockWindows(start, latest, window);
+        const batches = await mapPool(windows, 4, (range) =>
+          client.getLogs({ ...query, fromBlock: range.fromBlock, toBlock: range.toBlock }),
+        );
+        return batches.flat();
+      } catch (chunkError) {
+        lastError = chunkError;
+        if (!isLogRangeError(errorText(chunkError))) throw chunkError;
+        const narrower = logRangeLimit(errorText(chunkError));
+        const next = narrower !== undefined && narrower < window ? narrower : window / 2n;
+        if (next < 1n || next >= window) throw chunkError;
+        window = next;
+      }
+    }
+    throw lastError;
+  }
+}
+
+function historyFallback(item: LoadedChain): PublicClient | undefined {
+  const configured = process.env[item.config.rpcEnv]?.trim();
+  const pub = item.chain.rpcUrls.default.http[0];
+  if (!pub) return undefined;
+  if (configured && sameUrl(configured, pub)) return undefined;
+  return createPublicClient({ chain: item.chain, transport: http(pub, { timeout: 20_000 }) });
+}
+
+function canFallback(error: unknown): boolean {
+  if (error instanceof LogRangeError) return true;
+  const message = errorText(error);
+  return isLogRangeError(message) || /rate limit|too many request|429|timeout|timed out/i.test(message);
+}
+
+function historyError(name: string, error: unknown): Error {
+  return new Error(
+    `No pude leer el historial de ${name}. Sin ese historial una chain atrasada podria contarse dos veces. ${errorText(error)}`,
+  );
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function sameUrl(left: string, right: string): boolean {
+  return left.replace(/\/+$/, "") === right.replace(/\/+$/, "");
+}
+
+async function mapPool<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      const item = items[index];
+      if (item === undefined) continue;
+      results[index] = await fn(item);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
