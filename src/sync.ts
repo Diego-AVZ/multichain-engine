@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import {
   createPublicClient,
   createWalletClient,
+  fallback,
   getAddress,
   http,
   defineChain,
@@ -173,10 +174,24 @@ function loadChain(config: ChainConfig, account?: PrivateKeyAccount): LoadedChai
     nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
     rpcUrls: { default: { http: [rpc] } },
   });
-  const transport = http(rpc);
+  const transport = transportFor(rpc, chain);
   const publicClient = createPublicClient({ chain, transport });
   const walletClient = account ? createWalletClient({ account, chain, transport }) : undefined;
   return { config, chain, publicClient, walletClient };
+}
+
+function transportFor(rpc: string, chain: Chain) {
+  const urls = [rpc.trim()];
+  const add = (url: string | undefined) => {
+    if (!url || urls.some((item) => sameUrl(item, url))) return;
+    urls.push(url);
+  };
+  add(chain.rpcUrls.default.http[0]);
+  if (chain.id === arbitrum.id) add("https://arbitrum-one.publicnode.com");
+  const transports = urls.map((url) => http(url, { timeout: 20_000 }));
+  const only = transports[0];
+  if (!only || transports.length === 1) return only ?? http(rpc, { timeout: 20_000 });
+  return fallback(transports, { rank: false });
 }
 
 async function readAll(user: Address, chains: LoadedChain[]): Promise<ChainPulse[]> {
@@ -184,12 +199,17 @@ async function readAll(user: Address, chains: LoadedChain[]): Promise<ChainPulse
 }
 
 async function readPulse(user: Address, item: LoadedChain): Promise<ChainPulse> {
-  const snap = await item.publicClient.readContract({
-    address: item.config.storage,
-    abi: sendraStorageAbi,
-    functionName: "getPulseSnapshot",
-    args: [user],
-  });
+  let snap;
+  try {
+    snap = await item.publicClient.readContract({
+      address: item.config.storage,
+      abi: sendraStorageAbi,
+      functionName: "getPulseSnapshot",
+      args: [user],
+    });
+  } catch (error) {
+    throw new Error(`No pude leer el pulse de ${item.config.name}. ${errorText(error)}`);
+  }
   return {
     chainId: item.config.id,
     root: getAddress(snap.root),
