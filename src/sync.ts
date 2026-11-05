@@ -11,7 +11,7 @@ import {
   type WalletClient,
 } from "viem";
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
-import { arbitrum, base, bsc } from "viem/chains";
+import { arbitrum } from "viem/chains";
 import { globalPulseCommittedEvent, sendraStorageAbi } from "./abi.js";
 import {
   emptyAccumulators,
@@ -47,10 +47,16 @@ type LoadedChain = {
   walletClient?: WalletClient;
 };
 
+const robinhood = defineChain({
+  id: 4663,
+  name: "Robinhood Chain",
+  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+  rpcUrls: { default: { http: ["https://rpc.mainnet.chain.robinhood.com"] } },
+});
+
 const knownChains = new Map<number, Chain>([
   [arbitrum.id, arbitrum],
-  [base.id, base],
-  [bsc.id, bsc],
+  [robinhood.id, robinhood],
 ]);
 
 export type ChainSyncResult = {

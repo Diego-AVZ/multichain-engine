@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { getAddress, isAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { parseConfig } from "../src/config.js";
-import { bearerAuthorized, corsHeaders, redact, secretValues } from "../src/http.js";
+import { corsHeaders, redact, secretValues } from "../src/http.js";
 import { syncOne, type ChainSyncResult } from "../src/sync.js";
 
 export const maxDuration = 300;
@@ -20,47 +20,37 @@ type Payload = {
 
 export default {
   async fetch(request: Request): Promise<Response> {
-    const origin = request.headers.get("origin");
-    if (request.method === "OPTIONS") return preflight(origin);
-    if (request.method !== "POST") return json(405, { error: "Method not allowed" }, origin);
-    if (!bearerAuthorized(request.headers.get("authorization"), process.env.SYNC_API_TOKEN)) {
-      return json(401, { error: "Unauthorized" }, origin);
-    }
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders() });
+    if (request.method !== "POST") return json(405, { error: "Method not allowed" });
 
     const user = await readUser(request);
-    if (!user) return json(400, { error: "user must be an address" }, origin);
+    if (!user) return json(400, { error: "user must be an address" });
 
     const key = process.env.SYNCER_PRIVATE_KEY;
     if (!key || !/^0x[0-9a-fA-F]{64}$/.test(key)) {
-      return json(500, { user, error: "SYNCER_PRIVATE_KEY must be a 32-byte hex key" }, origin);
+      return json(500, { user, error: "SYNCER_PRIVATE_KEY must be a 32-byte hex key" });
     }
 
     let account;
     try {
       account = privateKeyToAccount(key as `0x${string}`);
     } catch (error) {
-      return json(500, { user, error: publicError(error) }, origin);
+      return json(500, { user, error: publicError(error) });
     }
 
     try {
       const appConfig = parseConfig(await readFile(new URL("../config.json", import.meta.url), "utf8"));
       if (process.env.VERCEL) appConfig.journalPath = "/tmp/multichain-engine-journal.json";
       const result = await syncOne(appConfig, user, { dryRun: false, account });
-      return json(result.ok ? 200 : 500, present(user, account.address, result.ok, result.error, result.chains), origin);
+      return json(result.ok ? 200 : 500, present(user, account.address, result.ok, result.error, result.chains));
     } catch (error) {
-      return json(500, { user, syncer: account.address, error: publicError(error) }, origin);
+      return json(500, { user, syncer: account.address, error: publicError(error) });
     }
   },
 };
 
-function preflight(origin: string | null): Response {
-  const headers = corsHeaders(origin, process.env.ALLOWED_ORIGIN);
-  if (!headers.has("Access-Control-Allow-Origin")) return new Response(null, { status: 403 });
-  return new Response(null, { status: 204, headers });
-}
-
-function json(status: number, body: Payload | { error: string }, origin: string | null): Response {
-  const headers = corsHeaders(origin, process.env.ALLOWED_ORIGIN);
+function json(status: number, body: Payload | { error: string }): Response {
+  const headers = corsHeaders();
   headers.set("content-type", "application/json; charset=utf-8");
   return new Response(JSON.stringify(body), { status, headers });
 }

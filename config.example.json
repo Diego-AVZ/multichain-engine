@@ -10,15 +10,9 @@
       "storage": "0x0000000000000000000000000000000000000000"
     },
     {
-      "id": 8453,
-      "name": "base",
-      "rpcEnv": "RPC_BASE",
-      "storage": "0x0000000000000000000000000000000000000000"
-    },
-    {
-      "id": 56,
-      "name": "bnb",
-      "rpcEnv": "RPC_BNB",
+      "id": 4663,
+      "name": "robinhood",
+      "rpcEnv": "RPC_ROBINHOOD",
       "storage": "0x0000000000000000000000000000000000000000"
     }
   ]
